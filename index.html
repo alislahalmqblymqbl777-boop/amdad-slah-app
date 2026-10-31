@@ -1878,7 +1878,7 @@ function getCurrentUsername(){
 }
 function hasPermission(perm){
     if(!_currentUser) return false;
-    if(_currentUser.role === 'full' || _currentUser.isMain) return true;
+    if(String(_currentUser.username || '').toLowerCase() === 'admin' || _currentUser.role === 'full' || _currentUser.isMain) return true;
     const p = _currentUser.permissions || {};
     if(perm === 'allowReports') return !!p.allowReports;
     if(perm === 'allowSettings') return !!p.allowSettings;
@@ -1886,7 +1886,7 @@ function hasPermission(perm){
 }
 function canAccessScreen(screenId){
     if(!_currentUser) return false;
-    if(_currentUser.role === 'full' || _currentUser.isMain) return true;
+    if(String(_currentUser.username || '').toLowerCase() === 'admin' || _currentUser.role === 'full' || _currentUser.isMain) return true;
     const p = _currentUser.permissions || {};
     const screens = p.screens || [];
     return screens.includes(screenId);
@@ -2194,11 +2194,18 @@ function login(){
     const email = username + "@almadad.app";
     window.FirebaseLayer.signInWithEmailAndPassword(window.FirebaseLayer.auth, email, password)
         .then((userCredential) => {
-            const profile = (getData('users') || []).find(u => u.username === username) || {};
+            const profile = (getData('users') || []).find(u => String(u.username || '').trim().toLowerCase() === username.toLowerCase()) || {};
+            // حساب admin هو حساب الإدارة الرئيسي: لا نعتمد على صلاحيات قديمة/ناقصة محفوظة محلياً.
+            const isAdminAccount = username.toLowerCase() === 'admin';
             _currentUser = Object.assign({}, profile, {
                 username,
-                role: profile.role || 'custom',
-                isMain: !!profile.isMain
+                role: isAdminAccount ? 'full' : (profile.role || 'custom'),
+                isMain: isAdminAccount || !!profile.isMain,
+                permissions: isAdminAccount ? {
+                    screens: ['dashboardScreen','itemsScreen','supplyScreen','withdrawScreen','returnWithdrawScreen','storesScreen','movementScreen','inOutReportScreen','entitiesScreen','assetsScreen','storeWithdrawReportScreen','vouchersScreen','foodScreen','fuelScreen','memosScreen','auditLogScreen','settingsScreen'],
+                    allowReports: true,
+                    allowSettings: true
+                } : (profile.permissions || {})
             });
 
             if(errorEl){ errorEl.classList.remove('show'); errorEl.style.display = 'none'; }

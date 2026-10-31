@@ -471,6 +471,38 @@ textarea#returnWithdrawNotes{
     /* حاوية الإطار الرئيسي للسند */
 }
 </style>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getDatabase, ref, set, get, onValue, off, update, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCUbF6Eo_rNSL7D4GRvuqJR93xb3BmP8aI",
+  authDomain: "slah-system.firebaseapp.com",
+  databaseURL: "https://slah-system-default-rtdb.firebaseio.com",
+  projectId: "slah-system",
+  storageBucket: "slah-system.firebasestorage.app",
+  messagingSenderId: "135716111938",
+  appId: "" // (هذا الجزء مخفي في الصورة، وسنضعه لاحقاً إذا تطلب الأمر، لكنه غير ضروري للمزامنة)
+};
+
+  try {
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    window.FirebaseLayer = {
+      app, auth, db, ref, set, get, onValue, off, update, remove,
+      signInWithEmailAndPassword, signOut, onAuthStateChanged
+    };
+    window.dispatchEvent(new Event('firebase-layer-ready'));
+  } catch (error) {
+    console.error('Firebase initialization failed:', error);
+    window.FirebaseLayer = null;
+    window.dispatchEvent(new Event('firebase-layer-error'));
+  }
+</script>
+
 </head>
 <body>
 <div class="app-container" id="app">
@@ -505,6 +537,7 @@ textarea#returnWithdrawNotes{
 <div style="display:flex;align-items:center;gap:15px;">
 <span style="font-size:28px;">⚔️</span>
 <span class="title">شعبة الإمداد - إدارة التموين</span>
+<span id="syncStatus" style="font-size:12px; color:#c9a227; background:rgba(0,0,0,0.3); padding:4px 10px; border-radius:10px;">🟡 جاري الاتصال...</span>
 </div>
 <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">
 <span class="user-header-badge" id="currentUserBadge">👤 <span id="currentUserName">—</span></span>
@@ -1190,13 +1223,16 @@ textarea#returnWithdrawNotes{
 <button class="btn btn-primary" onclick="saveFooterSettings()">💾 حفظ التذييل</button>
 <hr>
 
-<h3 class="text-gold">🔹 شعار البرنامج الموحد</h3>
-<div class="info-box">💡 يستخدم البرنامج الشعار نفسه في سندات التوريد والصرف والتقارير والمذكرات. يمكنك اختيار صورة من مستعرض الملفات وحفظها على هذا الجهاز، أو وضع ملف <strong>logo.png</strong> بجوار <strong>index.html</strong> داخل مجلد التطبيق ليكون شعارًا افتراضيًا عند تثبيت البرنامج على جهاز جديد.</div>
-<div class="row"><div class="col"><label>اختيار صورة الشعار من الملفات</label><input type="file" id="sharedLogoInput" accept="image/*" onchange="setLogo('shared', this)"></div></div>
+<h3 class="text-gold">🔹 الشعارات</h3>
+<div class="info-box">💡 بعد تحديد الشعارات من الأزرار أدناه، اضغط على زر <strong>"💾 حفظ الشعارات"</strong> لتثبيتها بشكل دائم.</div>
+<div class="row">
+<div class="col"><label>شعار سند التوريد</label><input type="file" accept="image/*" onchange="setLogo('supply', this)"></div>
+<div class="col"><label>شعار سند الصرف</label><input type="file" accept="image/*" onchange="setLogo('withdraw', this)"></div>
+<div class="col"><label>شعار التقارير والمذكرات</label><input type="file" accept="image/*" onchange="setLogo('movement', this)"></div>
+</div>
 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
-<button class="btn btn-success" onclick="saveLogoSettings()">💾 حفظ الشعار المختار</button>
-<button class="btn btn-primary" onclick="useAppFolderLogo()">↩️ استخدام شعار مجلد التطبيق (logo.png)</button>
-<button class="btn btn-primary" onclick="renderLogosPreview()">🔄 تحديث المعاينة</button>
+<button class="btn btn-success" onclick="saveLogoSettings()">💾 حفظ الشعارات</button>
+<button class="btn btn-danger" onclick="clearLogos()">🗑️ حذف جميع الشعارات</button>
 </div>
 <div id="logosPreview" style="display:flex;gap:15px;flex-wrap:wrap;margin-top:12px;padding:10px;background:rgba(0,0,0,0.2);border-radius:10px;border:1px solid rgba(201,162,39,0.3);min-height:90px;"></div>
 
@@ -1293,278 +1329,39 @@ textarea#returnWithdrawNotes{
   </div>
 </div>
 <script>
-/* =====================================================================
-   ================== 🗄️ IndexedDB Storage Layer ====================
-   ===================================================================== */
-(function(){
-    'use strict';
-    const DB_NAME = 'almadad_db';
-    const DB_VERSION = 2;
-    const STORES = {
-        kv: 'keyval',
-        vouchers: 'vouchers',
-        items: 'items',
-        movement: 'movement',
-        memos: 'memos',
-        assets: 'assets',
-        food: 'food',
-        fuel: 'fuel',
-        audit: 'audit',
-        meta: 'meta',
-        users: 'users'
-    };
-
-    let _db = null;
-    let _dbReady = false;
-    let _dbReadyResolvers = [];
-    let _indexedDBAvailable = typeof indexedDB !== 'undefined';
-
-    function notifyReady(){
-        _dbReady = true;
-        const r = _dbReadyResolvers;
-        _dbReadyResolvers = [];
-        r.forEach(function(fn){ try{ fn(); }catch(e){} });
-    }
-
-    function openDB(){
-        return new Promise(function(resolve, reject){
-            if(!_indexedDBAvailable){ reject(new Error('IndexedDB غير متاح')); return; }
-            if(_db){ resolve(_db); return; }
-            let settled = false;
-            const req = indexedDB.open(DB_NAME, DB_VERSION);
-            req.onupgradeneeded = function(e){
-                const db = e.target.result;
-                if(!db.objectStoreNames.contains(STORES.kv)) {
-                    db.createObjectStore(STORES.kv, { keyPath: 'key' });
-                }
-                if(!db.objectStoreNames.contains(STORES.vouchers)) {
-                    const s = db.createObjectStore(STORES.vouchers, { keyPath: 'id' });
-                    s.createIndex('by_type', 'type', { unique: false });
-                    s.createIndex('by_number', 'number', { unique: false });
-                    s.createIndex('by_date', 'issuedDate', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.items)) {
-                    const s = db.createObjectStore(STORES.items, { keyPath: 'id' });
-                    s.createIndex('by_store', 'store', { unique: false });
-                    s.createIndex('by_name', 'name', { unique: false });
-                    s.createIndex('by_store_name', ['store','name'], { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.movement)) {
-                    const s = db.createObjectStore(STORES.movement, { keyPath: 'id' });
-                    s.createIndex('by_store', 'store', { unique: false });
-                    s.createIndex('by_date', 'date', { unique: false });
-                    s.createIndex('by_voucher', 'voucherNumber', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.memos)) {
-                    const s = db.createObjectStore(STORES.memos, { keyPath: 'id' });
-                    s.createIndex('by_number', 'number', { unique: false });
-                    s.createIndex('by_date', 'date', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.assets)) {
-                    const s = db.createObjectStore(STORES.assets, { keyPath: 'id' });
-                    s.createIndex('by_entity', 'entity', { unique: false });
-                    s.createIndex('by_receiver', 'receiver', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.food)) {
-                    const s = db.createObjectStore(STORES.food, { keyPath: 'id' });
-                    s.createIndex('by_date', 'date', { unique: false });
-                    s.createIndex('by_unit', 'unit', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.fuel)) {
-                    const s = db.createObjectStore(STORES.fuel, { keyPath: 'id' });
-                    s.createIndex('by_date', 'date', { unique: false });
-                    s.createIndex('by_unit', 'unit', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.audit)) {
-                    const s = db.createObjectStore(STORES.audit, { keyPath: 'id', autoIncrement: true });
-                    s.createIndex('by_ts', 'ts', { unique: false });
-                }
-                if(!db.objectStoreNames.contains(STORES.meta)) {
-                    db.createObjectStore(STORES.meta, { keyPath: 'key' });
-                }
-                if(!db.objectStoreNames.contains(STORES.users)) {
-                    db.createObjectStore(STORES.users, { keyPath: 'username' });
-                }
-            };
-            req.onsuccess = function(e){
-                if(settled) return;
-                settled = true;
-                _db = e.target.result;
-                notifyReady();
-                resolve(_db);
-            };
-            req.onerror = function(e){
-                if(settled) return;
-                settled = true;
-                console.error('IndexedDB open error:', e.target.error);
-                reject(e.target.error || new Error('فشل فتح IndexedDB'));
-            };
-            req.onblocked = function(){ console.warn('IndexedDB blocked'); };
-        });
-    }
-
-    function tx(storeName, mode){
-        return new Promise(function(resolve, reject){
-            if(!_db){ reject(new Error('DB not open')); return; }
-            try{
-                const t = _db.transaction(storeName, mode || 'readonly');
-                resolve(t);
-            }catch(e){ reject(e); }
-        });
-    }
-    function reqAsPromise(req){
-        return new Promise(function(resolve, reject){
-            req.onsuccess = function(e){ resolve(e.target.result); };
-            req.onerror = function(e){ reject(e.target.error); };
-        });
-    }
-    function txDone(t){
-        return new Promise(function(resolve, reject){
-            t.oncomplete = function(){ resolve(); };
-            t.onerror = function(e){ reject(e.target.error); };
-            t.onabort = function(e){ reject(e.target.error || new Error('aborted')); };
-        });
-    }
-
-    const IDB = {
-        isAvailable: function(){ return _indexedDBAvailable; },
-        isReady: function(){ return _dbReady; },
-        ready: function(){
-            if(_dbReady) return Promise.resolve();
-            return new Promise(function(resolve){
-                _dbReadyResolvers.push(resolve);
-                if(!_db && _indexedDBAvailable){
-                    openDB().catch(function(){ notifyReady(); });
-                }
-                setTimeout(function(){ notifyReady(); resolve(); }, 3000);
-            });
-        },
-        open: openDB,
-        kvGet: async function(key){
-            await IDB.ready();
-            if(!_db) return undefined;
-            try{
-                const t = await tx(STORES.kv, 'readonly');
-                const r = await reqAsPromise(t.objectStore(STORES.kv).get(key));
-                return r ? r.value : undefined;
-            }catch(e){ console.warn('kvGet error', e); return undefined; }
-        },
-        kvSet: async function(key, value){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(STORES.kv, 'readwrite');
-                t.objectStore(STORES.kv).put({ key: key, value: value });
-                await txDone(t);
-                return true;
-            }catch(e){ console.warn('kvSet error', e); return false; }
-        },
-        kvDel: async function(key){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(STORES.kv, 'readwrite');
-                t.objectStore(STORES.kv).delete(key);
-                await txDone(t);
-                return true;
-            }catch(e){ return false; }
-        },
-        kvAll: async function(){
-            await IDB.ready();
-            if(!_db) return {};
-            try{
-                const t = await tx(STORES.kv, 'readonly');
-                const arr = await reqAsPromise(t.objectStore(STORES.kv).getAll());
-                const obj = {};
-                (arr||[]).forEach(function(r){ obj[r.key] = r.value; });
-                return obj;
-            }catch(e){ return {}; }
-        },
-        put: async function(storeName, obj){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(storeName, 'readwrite');
-                t.objectStore(storeName).put(obj);
-                await txDone(t);
-                return true;
-            }catch(e){ console.warn('put error', storeName, e); return false; }
-        },
-        get: async function(storeName, key){
-            await IDB.ready();
-            if(!_db) return undefined;
-            try{
-                const t = await tx(storeName, 'readonly');
-                return await reqAsPromise(t.objectStore(storeName).get(key));
-            }catch(e){ return undefined; }
-        },
-        del: async function(storeName, key){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(storeName, 'readwrite');
-                t.objectStore(storeName).delete(key);
-                await txDone(t);
-                return true;
-            }catch(e){ return false; }
-        },
-        getAll: async function(storeName){
-            await IDB.ready();
-            if(!_db) return [];
-            try{
-                const t = await tx(storeName, 'readonly');
-                return await reqAsPromise(t.objectStore(storeName).getAll());
-            }catch(e){ return []; }
-        },
-        count: async function(storeName){
-            await IDB.ready();
-            if(!_db) return 0;
-            try{
-                const t = await tx(storeName, 'readonly');
-                return await reqAsPromise(t.objectStore(storeName).count());
-            }catch(e){ return 0; }
-        },
-        clear: async function(storeName){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(storeName, 'readwrite');
-                t.objectStore(storeName).clear();
-                await txDone(t);
-                return true;
-            }catch(e){ return false; }
-        },
-        replaceAll: async function(storeName, arr){
-            await IDB.ready();
-            if(!_db) return false;
-            try{
-                const t = await tx(storeName, 'readwrite');
-                const s = t.objectStore(storeName);
-                s.clear();
-                (arr||[]).forEach(function(item){
-                    try { s.put(item); } catch(e){ console.warn('put item fail', e); }
-                });
-                await txDone(t);
-                return true;
-            }catch(e){ console.warn('replaceAll error', storeName, e); return false; }
-        },
-        estimate: async function(){
-            try{
-                if(navigator.storage && navigator.storage.estimate){
-                    const e = await navigator.storage.estimate();
-                    return { usage: e.usage || 0, quota: e.quota || 0 };
-                }
-            }catch(e){}
-            return { usage: 0, quota: 0 };
-        }
-    };
-
-    window.IDB = IDB;
-
-    if(_indexedDBAvailable){
-        openDB().catch(function(e){ console.warn('early openDB failed:', e); });
-    }
-})();
+/* ==================== Cloud compatibility bridge (no IndexedDB) ==================== */
+const CloudCompat = {
+    isAvailable: function(){ return !!window.FirebaseLayer; },
+    isReady: function(){ return true; },
+    ready: function(){ return Promise.resolve(); },
+    open: function(){ return Promise.resolve(null); },
+    estimate: async function(){ return {usage:0, quota:0}; },
+    kvGet: async function(key){ return _memoryCache[key]; },
+    kvSet: async function(key, value){ saveData(key, value); return true; },
+    kvDel: async function(key){ saveData(key, null); return true; },
+    kvAll: async function(){ return Object.assign({}, _memoryCache); },
+    put: async function(storeName, obj){
+        const rows = getData(storeName) || [];
+        const keyField = storeName === 'users' ? 'username' : 'id';
+        const key = obj && obj[keyField];
+        const index = rows.findIndex(x => x && key !== undefined && x[keyField] === key);
+        if(index >= 0) rows[index] = obj; else rows.push(obj);
+        saveData(storeName, rows);
+        return true;
+    },
+    get: async function(storeName, key){
+        return (getData(storeName) || []).find(x => x && (x.id === key || x.username === key));
+    },
+    del: async function(storeName, key){
+        saveData(storeName, (getData(storeName) || []).filter(x => x && x.id !== key && x.username !== key));
+        return true;
+    },
+    getAll: async function(storeName){ return getData(storeName) || []; },
+    count: async function(storeName){ return (getData(storeName) || []).length; },
+    clear: async function(storeName){ saveData(storeName, []); return true; },
+    replaceAll: async function(storeName, rows){ saveData(storeName, rows || []); return true; }
+};
+window.CloudCompat = CloudCompat;
 
 /* ==================== طبقة التخزين الموحدة ==================== */
 const STORAGE_PREFIX='almadad_';
@@ -1644,9 +1441,9 @@ async function initDefaultUsers(){
         if(!users.length){
             users = JSON.parse(JSON.stringify(DEFAULT_USERS));
             _memoryCache.users = users;
-            if(IDB.isReady()){
+            if(CloudCompat.isReady()){
                 for(const u of users){
-                    await IDB.put('users', u);
+                    await CloudCompat.put('users', u);
                 }
             }
             try{ localStorage.setItem('almadad_users', JSON.stringify(users)); }catch(e){}
@@ -1656,42 +1453,16 @@ async function initDefaultUsers(){
 }
 
 async function initStorage(){
-    try{
-        await IDB.ready();
-        if(!IDB.isReady()){
-            console.warn('⚠️ IndexedDB غير متاح، سيتم استخدام localStorage كاحتياطي');
-            loadFromLocalStorageFallback();
-            notifyStorageReady();
-            return;
-        }
-        await migrateFromLegacy(false);
-        await loadAllToMemory();
-
-        // لا نستبدل شعار مجلد التطبيق بإعداد شعار قديم محفوظ على جهاز واحد.
-        logoData = normalizeLogoData({shared:EMBEDDED_SHARED_LOGO});
-
-        if(_memoryCache.headerSettings) headerSettings = Object.assign({}, headerSettings, _memoryCache.headerSettings);
-        if(_memoryCache.footerSettings) footerSettings = Object.assign({}, footerSettings, _memoryCache.footerSettings);
-
-        let users = await IDB.getAll('users');
-        if(!users || !users.length){
-            try{
-                const lu = JSON.parse(localStorage.getItem('almadad_users') || '[]');
-                if(lu && lu.length) users = lu;
-            }catch(e){}
-        }
-        _memoryCache.users = users || [];
-        await initDefaultUsers();
-
-        notifyStorageReady();
-        console.log('✅ تم تهيئة IndexedDB. السندات:', _memoryCache.vouchers.length, '— المستخدمون:', _memoryCache.users.length);
-        try{
-            const info = document.getElementById('storageInitInfo');
-            if(info) info.textContent = '✅ التخزين: IndexedDB — ' + _memoryCache.vouchers.length + ' سند — ' + _memoryCache.users.length + ' مستخدم';
-        }catch(e){}
-    }catch(e){
-        console.error('initStorage error:', e);
+    try {
+        // Load legacy localStorage data into memory so empty cloud nodes can be seeded after login.
         loadFromLocalStorageFallback();
+        // Firebase reads require an authenticated session; login starts the listeners.
+        if (window.FirebaseLayer && window.FirebaseLayer.auth.currentUser) setupFirebaseSync();
+        notifyStorageReady();
+        const info = document.getElementById('storageInitInfo');
+        if(info) info.textContent = '☁️ التخزين السحابي جاهز — سجّل الدخول لبدء المزامنة';
+    } catch(e) {
+        console.error('initStorage error:', e);
         notifyStorageReady();
     }
 }
@@ -1704,7 +1475,7 @@ function loadFromLocalStorageFallback(){
                 _memoryCache[k] = Array.isArray(v) ? v : [];
             }catch(e){ _memoryCache[k] = []; }
         });
-        _memoryCache.logoData = normalizeLogoData({shared:EMBEDDED_SHARED_LOGO});
+        try{ _memoryCache.logoData = JSON.parse(localStorage.getItem('logoData') || '{}'); }catch(e){ _memoryCache.logoData = {}; }
         try{ _memoryCache.headerSettings = JSON.parse(localStorage.getItem('headerSettings') || 'null'); }catch(e){}
         try{ _memoryCache.footerSettings = JSON.parse(localStorage.getItem('footerSettings') || 'null'); }catch(e){}
         try{ _memoryCache.users = JSON.parse(localStorage.getItem('almadad_users') || '[]'); }catch(e){ _memoryCache.users = []; }
@@ -1719,152 +1490,38 @@ function loadFromLocalStorageFallback(){
 
 async function loadAllToMemory(){
     for(const k of IDB_KV_KEYS){
-        const v = await IDB.kvGet(k);
+        const v = await CloudCompat.kvGet(k);
         if(v !== undefined) _memoryCache[k] = v;
     }
-    const stores = await IDB.kvGet('stores');
+    const stores = await CloudCompat.kvGet('stores');
     _memoryCache.stores = Array.isArray(stores) ? stores : [];
-    const entities = await IDB.kvGet('entities');
+    const entities = await CloudCompat.kvGet('entities');
     _memoryCache.entities = Array.isArray(entities) ? entities : [];
-    const logoDataV = await IDB.kvGet('logoData');
-    _memoryCache.logoData = normalizeLogoData(logoDataV || {});
-    const hs = await IDB.kvGet('headerSettings');
+    const logoDataV = await CloudCompat.kvGet('logoData');
+    _memoryCache.logoData = logoDataV || { supply:'', withdraw:'', movement:'', entities:'' };
+    const hs = await CloudCompat.kvGet('headerSettings');
     if(hs) _memoryCache.headerSettings = hs;
-    const fs = await IDB.kvGet('footerSettings');
+    const fs = await CloudCompat.kvGet('footerSettings');
     if(fs) _memoryCache.footerSettings = fs;
-    const sc = await IDB.kvGet('settingsCode');
+    const sc = await CloudCompat.kvGet('settingsCode');
     if(sc) _memoryCache.settingsCode = sc;
-    const pw = await IDB.kvGet('password');
+    const pw = await CloudCompat.kvGet('password');
     if(pw) _memoryCache.password = pw;
-    const paths = await IDB.kvGet('paths');
+    const paths = await CloudCompat.kvGet('paths');
     _memoryCache.paths = paths || {};
 
-    _memoryCache.items = await IDB.getAll('items');
-    _memoryCache.movement = await IDB.getAll('movement');
-    _memoryCache.vouchers = await IDB.getAll('vouchers');
-    _memoryCache.memos = await IDB.getAll('memos');
-    _memoryCache.assets = await IDB.getAll('assets');
-    _memoryCache.food = await IDB.getAll('food');
-    _memoryCache.fuel = await IDB.getAll('fuel');
+    _memoryCache.items = await CloudCompat.getAll('items');
+    _memoryCache.movement = await CloudCompat.getAll('movement');
+    _memoryCache.vouchers = await CloudCompat.getAll('vouchers');
+    _memoryCache.memos = await CloudCompat.getAll('memos');
+    _memoryCache.assets = await CloudCompat.getAll('assets');
+    _memoryCache.food = await CloudCompat.getAll('food');
+    _memoryCache.fuel = await CloudCompat.getAll('fuel');
 }
 
-async function migrateFromLegacy(showToastMsg){
-    if(!IDB.isReady()) return false;
-    const hasLegacy = localStorage.getItem('almadad_migration_done') !== '1' &&
-        (localStorage.getItem('items') || localStorage.getItem('vouchers') ||
-         localStorage.getItem('almadad_vouchers_0') || localStorage.getItem('stores'));
-    if(!hasLegacy && !showToastMsg) return false;
+async function migrateFromLegacy(){ return false; }
 
-    let migrated = 0;
-    try{
-        const items = JSON.parse(localStorage.getItem('items') || '[]');
-        if(Array.isArray(items) && items.length){
-            const arr = items.map(function(x, idx){
-                return Object.assign({ id: x.id || ('item_' + Date.now() + '_' + idx) }, x);
-            });
-            await IDB.replaceAll('items', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const stores = JSON.parse(localStorage.getItem('stores') || '[]');
-        if(Array.isArray(stores) && stores.length){
-            await IDB.kvSet('stores', stores);
-        }
-    }catch(e){}
-    try{
-        const entities = JSON.parse(localStorage.getItem('entities') || '[]');
-        if(Array.isArray(entities) && entities.length){
-            await IDB.kvSet('entities', entities);
-        }
-    }catch(e){}
-    try{
-        let all = [];
-        const chunks = parseInt(localStorage.getItem(STORAGE_PREFIX+'vouchers_chunks') || '0', 10) || 0;
-        if(chunks > 0){
-            for(let i=0;i<chunks;i++){
-                const c = localStorage.getItem(STORAGE_PREFIX+'vouchers_'+i);
-                if(!c) continue;
-                try{ const arr=JSON.parse(c); if(Array.isArray(arr)) all = all.concat(arr); }catch(e){}
-            }
-        }
-        if(!all.length){
-            const c = localStorage.getItem('vouchers');
-            if(c){ const arr=JSON.parse(c); if(Array.isArray(arr)) all = arr; }
-        }
-        if(all.length){
-            const arr = all.map(function(v, idx){
-                return Object.assign({ id: v.id || ('v_' + (v.createdAt || Date.now()) + '_' + idx) }, v);
-            });
-            await IDB.replaceAll('vouchers', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const mv = JSON.parse(localStorage.getItem('movement') || '[]');
-        if(Array.isArray(mv) && mv.length){
-            const arr = mv.map(function(x, idx){ return Object.assign({ id: x.id || ('mv_' + Date.now() + '_' + idx) }, x); });
-            await IDB.replaceAll('movement', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const mm = JSON.parse(localStorage.getItem('memos') || '[]');
-        if(Array.isArray(mm) && mm.length){
-            const arr = mm.map(function(x, idx){ return Object.assign({ id: x.id || ('m_' + Date.now() + '_' + idx) }, x); });
-            await IDB.replaceAll('memos', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const a = JSON.parse(localStorage.getItem('assets') || '[]');
-        if(Array.isArray(a) && a.length){
-            const arr = a.map(function(x, idx){ return Object.assign({ id: x.id || ('a_' + Date.now() + '_' + idx) }, x); });
-            await IDB.replaceAll('assets', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const f = JSON.parse(localStorage.getItem('food') || '[]');
-        if(Array.isArray(f) && f.length){
-            const arr = f.map(function(x, idx){ return Object.assign({ id: x.id || ('f_' + Date.now() + '_' + idx) }, x); });
-            await IDB.replaceAll('food', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const fu = JSON.parse(localStorage.getItem('fuel') || '[]');
-        if(Array.isArray(fu) && fu.length){
-            const arr = fu.map(function(x, idx){ return Object.assign({ id: x.id || ('fu_' + Date.now() + '_' + idx) }, x); });
-            await IDB.replaceAll('fuel', arr);
-            migrated += arr.length;
-        }
-    }catch(e){}
-    try{
-        const ld = JSON.parse(localStorage.getItem('logoData') || 'null');
-        if(ld) await IDB.kvSet('logoData', ld);
-        const hs = JSON.parse(localStorage.getItem('headerSettings') || 'null');
-        if(hs) await IDB.kvSet('headerSettings', hs);
-        const fs = JSON.parse(localStorage.getItem('footerSettings') || 'null');
-        if(fs) await IDB.kvSet('footerSettings', fs);
-        const sc = localStorage.getItem('appSettingsCode');
-        if(sc) await IDB.kvSet('settingsCode', sc);
-        const pw = localStorage.getItem('appPassword');
-        if(pw) await IDB.kvSet('password', pw);
-        const us = JSON.parse(localStorage.getItem('almadad_users') || 'null');
-        if(us && Array.isArray(us) && us.length){
-            for(const u of us){ await IDB.put('users', u); }
-        }
-    }catch(e){}
 
-    localStorage.setItem('almadad_migration_done', '1');
-    localStorage.setItem('almadad_migrated_count', String(migrated));
-    if(showToastMsg){
-        _notify('✅ تم ترحيل ' + migrated + ' سجل إلى IndexedDB', 'success');
-        logAudit('add','نظام','ترحيل ' + migrated + ' سجل');
-    }
-    return migrated > 0;
-}
 
 async function deleteLegacyData(){
     if(!await _confirm('⚠️ سيتم حذف البيانات القديمة من localStorage نهائياً. متابعة؟', { type:'danger' })) return;
@@ -1910,92 +1567,110 @@ function refreshLegacyDataPanel(){
     }catch(e){}
 }
 
-function saveData(k, d){
-    if(k in _memoryCache) _memoryCache[k] = d;
-    if(IDB.isReady()){
-        if(k === 'vouchers'){
-            const arr = (d || []).map(function(v, idx){
-                return Object.assign({ id: v.id || ('v_' + (v.createdAt || Date.now()) + '_' + idx) }, v);
-            });
-            IDB.replaceAll('vouchers', arr).catch(function(e){ console.warn('save vouchers fail', e); });
-        } else if(k === 'items'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('item_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('items', arr).catch(function(e){ console.warn('save items fail', e); });
-        } else if(k === 'movement'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('mv_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('movement', arr).catch(function(e){ console.warn('save movement fail', e); });
-        } else if(k === 'memos'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('m_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('memos', arr).catch(function(e){ console.warn('save memos fail', e); });
-        } else if(k === 'assets'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('a_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('assets', arr).catch(function(e){ console.warn('save assets fail', e); });
-        } else if(k === 'food'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('f_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('food', arr).catch(function(e){ console.warn('save food fail', e); });
-        } else if(k === 'fuel'){
-            const arr = (d || []).map(function(x, idx){
-                return Object.assign({ id: x.id || ('fu_' + Date.now() + '_' + idx) }, x);
-            });
-            IDB.replaceAll('fuel', arr).catch(function(e){ console.warn('save fuel fail', e); });
-        } else if(k === 'users'){
-            IDB.replaceAll('users', d).catch(function(e){ console.warn('save users fail', e); });
-        } else if(k === 'stores' || k === 'entities'){
-            IDB.kvSet(k, d).catch(function(e){ console.warn('save ' + k + ' fail', e); });
-        } else if(k === 'logoData' || k === 'headerSettings' || k === 'footerSettings'){
-            IDB.kvSet(k, d).catch(function(e){ console.warn('save ' + k + ' fail', e); });
-        }
-        try{
-            if(k === 'vouchers'){
-                // لا نحفظ السندات في localStorage بعد الترحيل
-            } else if(k === 'users'){
-                localStorage.setItem('almadad_users', JSON.stringify(d));
+function setupFirebaseSync() {
+    if(!window.FirebaseLayer || !window.FirebaseLayer.auth.currentUser) return;
+    const {db, ref, onValue} = window.FirebaseLayer;
+    const syncKeys = ['items', 'vouchers', 'movement', 'memos', 'assets', 'food', 'fuel', 'stores', 'entities', 'users', 'audit'];
+
+    // Avoid duplicate subscriptions after repeated logins.
+    if(window._firebaseSyncUnsubs) window._firebaseSyncUnsubs.forEach(fn => { try{fn();}catch(e){} });
+    window._firebaseSyncUnsubs = [];
+
+    syncKeys.forEach(key => {
+        const nodeRef = ref(db, 'almadad/' + key);
+        const unsubscribe = onValue(nodeRef, (snapshot) => {
+            const val = snapshot.val();
+            if(val === null || val === undefined) {
+                // First cloud login: preserve locally cached legacy records by seeding an empty node.
+                const localRows = Array.isArray(_memoryCache[key]) ? _memoryCache[key] : [];
+                if(localRows.length) {
+                    const seed = {};
+                    localRows.forEach((item, index) => {
+                        const rawKey = item && (item.id || item.username || item.number);
+                        const safeKey = String(rawKey || ('key_' + index)).replace(/[.#$]/g, '_').replace(/\[/g, '_').replace(/\]/g, '_').replace(/\//g, '_');
+                        seed[safeKey] = item;
+                    });
+                    window.FirebaseLayer.set(nodeRef, seed).catch(e => console.error('Firebase initial migration failed (' + key + '):', e));
+                } else {
+                    _memoryCache[key] = [];
+                }
             } else {
-                localStorage.setItem(k, JSON.stringify(d));
+                _memoryCache[key] = Object.values(val);
             }
-        }catch(e){}
-    } else {
-        try{
-            if(k === 'users') localStorage.setItem('almadad_users', JSON.stringify(d));
-            else localStorage.setItem(k, JSON.stringify(d));
-        }catch(e){}
+            notifyStorageReady();
+            try {
+                if (key === 'items' || key === 'vouchers') { renderItems(); renderVouchers(); refreshItemDropdowns(); }
+                if (key === 'stores' || key === 'entities') { refreshAllSelects(); }
+                if (key === 'assets') renderAssets();
+                if (key === 'memos') renderMemos();
+                if (key === 'food') renderFoodRecords();
+                if (key === 'fuel') renderFuelRecords();
+                if (key === 'users') renderLoginUsersList();
+                if (typeof updateLowStockBadge === 'function') updateLowStockBadge();
+            } catch(e) { console.warn('Firebase UI refresh:', e); }
+        }, error => console.error('Firebase read error (' + key + '):', error));
+        if(typeof unsubscribe === 'function') window._firebaseSyncUnsubs.push(unsubscribe);
+    });
+
+    // Settings and audit are synchronized as single objects, not converted to arrays.
+    ['logoData','headerSettings','footerSettings','settingsCode','password','paths'].forEach(key => {
+        const nodeRef = ref(db, 'almadad/' + key);
+        const unsubscribe = onValue(nodeRef, snapshot => {
+            const value = snapshot.val();
+            if(value !== null && value !== undefined) {
+                _memoryCache[key === 'audit' ? 'audit' : key] = value;
+                if(key === 'logoData' && typeof value === 'object') {
+                    logoData = Object.assign({supply:'',withdraw:'',movement:'',entities:''}, value);
+                    try{ renderLogosPreview(); }catch(e){}
+                }
+                if(key === 'headerSettings' && typeof value === 'object') headerSettings = Object.assign({}, headerSettings, value);
+                if(key === 'footerSettings' && typeof value === 'object') footerSettings = Object.assign({}, footerSettings, value);
+            }
+        }, error => console.error('Firebase settings read error (' + key + '):', error));
+        if(typeof unsubscribe === 'function') window._firebaseSyncUnsubs.push(unsubscribe);
+    });
+}
+
+function saveData(k, d){
+    _memoryCache[k] = d;
+    if(!window.FirebaseLayer) return;
+    const {db, ref, set} = window.FirebaseLayer;
+    let dataToSave = d;
+    if(Array.isArray(d)){
+        const obj = {};
+        d.forEach((item, index) => {
+            const rawKey = item && (item.id || item.username || item.number);
+            const safeKey = String(rawKey || ('key_' + index)).replace(/[.#$]/g, '_').replace(/\\[/g, '_').replace(/\\]/g, '_').replace(/\\//g, '_');
+            obj[safeKey] = item;
+        });
+        dataToSave = obj;
     }
+    // Do not store user passwords in Realtime Database; Firebase Auth owns credentials.
+    if(k === 'users' && dataToSave && typeof dataToSave === 'object') {
+        const cleanUsers = {};
+        Object.keys(dataToSave).forEach(key => {
+            const user = Object.assign({}, dataToSave[key]);
+            delete user.password;
+            cleanUsers[key] = user;
+        });
+        dataToSave = cleanUsers;
+    }
+    set(ref(db, 'almadad/' + k), dataToSave)
+        .catch(e => console.error('Firebase save error (' + k + '):', e));
 }
 
 function getData(k){
     if(k in _memoryCache && _memoryCache[k] !== null && _memoryCache[k] !== undefined){
-        const v = _memoryCache[k];
-        if(Array.isArray(v)) return v;
-        return v;
+        return _memoryCache[k];
     }
-    if(k === 'vouchers'){
-        const all = [];
-        try{
-            const chunks = parseInt(localStorage.getItem(STORAGE_PREFIX+'vouchers_chunks') || '0', 10) || 0;
-            for(let i=0;i<chunks;i++){
-                const c = localStorage.getItem(STORAGE_PREFIX+'vouchers_'+i);
-                if(!c) continue;
-                try{ const arr=JSON.parse(c); if(Array.isArray(arr)) all.push.apply(all, arr); }catch(e){}
-            }
-        }catch(e){}
-        return all;
-    }
-    try{ return JSON.parse(localStorage.getItem(k) || '[]'); }catch(e){ return []; }
+    return [];
 }
+
+
 
 async function refreshStorageIndicator(){
     try{
-        const est = await IDB.estimate();
+        const est = await CloudCompat.estimate();
         const usageMB = (est.usage || 0) / (1024*1024);
         const quotaMB = (est.quota || 0) / (1024*1024);
         const pct = quotaMB > 0 ? Math.min(100, (usageMB / quotaMB) * 100) : 0;
@@ -2034,7 +1709,7 @@ async function refreshStorageIndicator(){
 }
 
 async function estimateStorageQuota(){
-    const est = await IDB.estimate();
+    const est = await CloudCompat.estimate();
     const usageMB = (est.usage || 0) / (1024*1024);
     const quotaMB = (est.quota || 0) / (1024*1024);
     await _confirm(
@@ -2141,8 +1816,7 @@ async function estimateStorageQuota(){
 const APP_PASSWORD='7718';
 const DEFAULT_SETTINGS_CODE='slah';
 let supplyItems=[];let withdrawItems=[];let returnWithdrawItems=[];
-const EMBEDDED_SHARED_LOGO = (function(){ try { return new URL('logo.png', window.location.href).href; } catch(e) { return 'logo.png'; } })(); // ملف الشعار الثابت بجوار index.html
-let logoData={shared:EMBEDDED_SHARED_LOGO,supply:EMBEDDED_SHARED_LOGO,withdraw:EMBEDDED_SHARED_LOGO,movement:EMBEDDED_SHARED_LOGO,entities:EMBEDDED_SHARED_LOGO};
+let logoData={supply:'',withdraw:'',movement:'',entities:''};
 let headerSettings={line1:'القوات المسلحة الجنوبية',line2:'المحور الثالث مشاة و إسناد',line3:'شعبة الامداد - إدارة التموين'};
 let footerSettings={rightPosition:'مدير إدارة الإمداد والتموين',rightName:'',leftPosition:'رئيس شعبة الإمداد',leftName:'',withdrawFooterMode:'standard',withdrawFooterRightPosition:'مدير إدارة الإمداد والتموين',withdrawFooterRightName:''};
 let _currentPreviewVoucher=null;let _voucherPreviewReturnScreen='mainScreen';
@@ -2507,60 +2181,46 @@ function login(){
     const password = (document.getElementById('loginPassword')?.value || '').trim();
     const errorEl = document.getElementById('loginError');
 
-    if(!username){
-        if(errorEl){ errorEl.textContent = '❌ أدخل اسم المستخدم'; errorEl.classList.add('show'); }
-        document.getElementById('loginUserInput')?.focus();
-        playSound('error');
+    if(!username || !password){
+        if(errorEl){ errorEl.textContent = '❌ أدخل اسم المستخدم وكلمة المرور'; errorEl.classList.add('show'); }
         return;
     }
-    if(!password){
-        if(errorEl){ errorEl.textContent = '❌ أدخل كلمة المرور'; errorEl.classList.add('show'); }
-        document.getElementById('loginPassword')?.focus();
-        playSound('error');
-        return;
-    }
-
-    const users = getUsers();
-    const user = users.find(u => u.username === username);
-
-    if(!user){
-        if(errorEl){ errorEl.textContent = '❌ اسم المستخدم غير موجود'; errorEl.classList.add('show'); }
-        document.getElementById('loginPassword').value = '';
-        playSound('error');
-        return;
-    }
-    if(user.password !== password){
-        if(errorEl){ errorEl.textContent = '❌ كلمة المرور غير صحيحة'; errorEl.classList.add('show'); }
-        document.getElementById('loginPassword').value = '';
+    if(!window.FirebaseLayer || !window.FirebaseLayer.signInWithEmailAndPassword){
+        if(errorEl){ errorEl.textContent = '❌ إعداد Firebase غير مكتمل. أدخل مفاتيح مشروعك أولاً.'; errorEl.classList.add('show'); }
         playSound('error');
         return;
     }
 
-    _currentUser = user;
-    if(errorEl){ errorEl.classList.remove('show'); errorEl.style.display = 'none'; }
+    const email = username + "@almadad.app";
+    window.FirebaseLayer.signInWithEmailAndPassword(window.FirebaseLayer.auth, email, password)
+        .then((userCredential) => {
+            const profile = (getData('users') || []).find(u => u.username === username) || {};
+            _currentUser = Object.assign({}, profile, {
+                username,
+                role: profile.role || 'custom',
+                isMain: !!profile.isMain
+            });
 
-    document.getElementById('loginScreen').classList.remove('active');
-    document.getElementById('loginScreen').style.setProperty('display','none','important');
-    const ms = document.getElementById('mainScreen');
-    ms.classList.add('active');
-    showMainHeaderMenu();
+            if(errorEl){ errorEl.classList.remove('show'); errorEl.style.display = 'none'; }
+            document.getElementById('loginScreen').classList.remove('active');
+            document.getElementById('loginScreen').style.setProperty('display','none','important');
+            document.getElementById('mainScreen').classList.add('active');
+            showMainHeaderMenu();
 
-    refreshAllSelects();
-    renderItems();
-    renderStores();
-    renderVouchers();
-
-    document.getElementById('loginPassword').value = '';
-    const b = document.querySelector('.toggle-password-btn');
-    if(b){ b.textContent = '👁️'; b.style.color = 'var(--gold)'; document.getElementById('loginPassword').type = 'password'; }
-
-    applyUserPermissions();
-
-    playSound('success');
-    logAudit('print','دخول', _currentUser.username + ' — تسجيل دخول');
-
-    try{ initAllAutocomplete(); }catch(e){}
-    _notify('👋 أهلاً ' + _currentUser.username, 'success');
+            setupFirebaseSync();
+            refreshAllSelects(); renderItems(); renderStores(); renderVouchers();
+            applyUserPermissions();
+            try{ initAllAutocomplete(); }catch(e){}
+            document.getElementById('loginPassword').value = '';
+            playSound('success');
+            _notify('👋 أهلاً ' + username, 'success');
+        })
+        .catch((error) => {
+            console.error('Firebase login error:', error);
+            if(errorEl){ errorEl.textContent = '❌ خطأ في اسم المستخدم أو كلمة المرور'; errorEl.classList.add('show'); }
+            document.getElementById('loginPassword').value = '';
+            playSound('error');
+        });
 }
 
 async function logout(){
@@ -2579,6 +2239,11 @@ async function logout(){
         }
     }
     logAudit('print','خروج', (_currentUser ? _currentUser.username : '') + ' — تسجيل خروج');
+    if(window._firebaseSyncUnsubs) window._firebaseSyncUnsubs.forEach(fn => { try{fn();}catch(e){} });
+    window._firebaseSyncUnsubs = [];
+    if(window.FirebaseLayer && window.FirebaseLayer.auth.currentUser){
+        window.FirebaseLayer.signOut(window.FirebaseLayer.auth).catch(e => console.warn('Firebase signOut:', e));
+    }
     _currentUser = null;
     const ms = document.getElementById('mainScreen');
     ms.classList.remove('active');
@@ -2704,8 +2369,8 @@ function logAudit(action, entity, details){
             details: String(details||'').substring(0,200),
             user: getCurrentUsername()
         };
-        if(IDB.isReady()){
-            IDB.put('audit', entry).catch(function(){});
+        if(CloudCompat.isReady()){
+            CloudCompat.put('audit', entry).catch(function(){});
         }
         try{
             const log = JSON.parse(SafeStorage.get(AUDIT_KEY)||'[]');
@@ -2723,8 +2388,8 @@ async function renderAuditLog(){
     const ft = (document.getElementById('auditFilterText')?.value || '').trim().toLowerCase();
     let log = [];
     try{
-        if(IDB.isReady()){
-            log = await IDB.getAll('audit');
+        if(CloudCompat.isReady()){
+            log = await CloudCompat.getAll('audit');
             log.sort(function(a,b){ return String(b.ts||'').localeCompare(String(a.ts||'')); });
             log = log.slice(0, 1000);
         }
@@ -2754,7 +2419,7 @@ async function renderAuditLog(){
 
 async function clearAuditLog(){
     if(!await _confirm('⚠️ مسح سجل التغييرات؟', {type:'danger', title:'تأكيد المسح'})) return;
-    if(IDB.isReady()) await IDB.clear('audit');
+    if(CloudCompat.isReady()) await CloudCompat.clear('audit');
     SafeStorage.set(AUDIT_KEY, '[]');
     renderAuditLog();
     showToast('🗑️ تم المسح');
@@ -2765,18 +2430,9 @@ async function clearAuditLog(){
    ============ دوال العرض الأساسية والمساعدة =========================
    ===================================================================== */
 
-function getSharedLogo(){
-    // الشعار المختار من الإعدادات له الأولوية؛ وإن لم يوجد نستخدم logo.png من مجلد التطبيق.
-    const saved = logoData && (logoData.shared || logoData.supply || logoData.withdraw || logoData.movement || logoData.entities);
-    return (saved && saved !== EMBEDDED_SHARED_LOGO) ? saved : (EMBEDDED_SHARED_LOGO || saved || '');
-}
-function normalizeLogoData(data){
-    data = (data && typeof data === 'object') ? data : {};
-    const shared = data.shared || data.supply || data.withdraw || data.movement || data.entities || EMBEDDED_SHARED_LOGO || '';
-    return {shared:shared, supply:shared, withdraw:shared, movement:shared, entities:shared};
-}
 function loadAllData(){
-    logoData = normalizeLogoData(logoData);
+    if(!logoData || typeof logoData !== 'object') logoData = { supply:'', withdraw:'', movement:'', entities:'' };
+    if(!('entities' in logoData)) logoData.entities = '';
     if(_memoryCache.headerSettings) headerSettings = Object.assign({}, headerSettings, _memoryCache.headerSettings);
     if(_memoryCache.footerSettings) footerSettings = Object.assign({}, footerSettings, _memoryCache.footerSettings);
 }
@@ -2804,9 +2460,9 @@ function getHeaderRightHtml(){
            escapeVoucherHtml(headerSettings.line2) + '<br>' +
            escapeVoucherHtml(headerSettings.line3);
 }
-function getCurrentUserFooterText(username){
-    const u = String(username || getCurrentUsername() || 'غير معروف').trim();
-    return 'تم التصدير بواسطة نظام الإمداد - تصميم صلاح المقبلي - اسم المستخدم - ' + escapeVoucherHtml(u);
+function getCurrentUserFooterText(){
+    const u = getCurrentUsername();
+    return 'تم التصدير بواسطة نظام الإمداد - تصميم صلاح المقبلي - المستخدم: ' + escapeVoucherHtml(u);
 }
 
 /* =====================================================================
@@ -3052,7 +2708,7 @@ function buildFullReportHtmlForExcel(mainContentHtml){
 }
 
 function buildReportHeader(type, no, date){
-    const logo = getSharedLogo();
+    const logo = type === 'entities' ? (logoData.entities || logoData.movement || '') : (logoData.movement || '');
     return '<div class="report-print-header" style="display:grid;grid-template-columns:1fr 180px 1fr;align-items:center;gap:10px;">' +
         '<div style="text-align:right;">' + getHeaderRightHtml() + '</div>' +
         '<div style="text-align:center;">' + (logo ? '<img src="' + logo + '" style="max-height:70px;max-width:120px;">' : '') + '</div>' +
@@ -3245,7 +2901,7 @@ function setSavedPath(k, v){
     try{
         _memoryCache.paths = _memoryCache.paths || {};
         _memoryCache.paths[k] = v || '';
-        if(IDB.isReady()) IDB.kvSet('paths', _memoryCache.paths).catch(function(){});
+        if(CloudCompat.isReady()) CloudCompat.kvSet('paths', _memoryCache.paths).catch(function(){});
         localStorage.setItem(PATH_KEYS[k], v || '');
         return true;
     }catch(e){ return false; }
@@ -3287,7 +2943,7 @@ async function clearPathsSettings(){
     if(!await _confirm('⚠️ مسح المسارات؟', {type:'warning'})) return;
     Object.values(PATH_KEYS).forEach(k => { try{ localStorage.removeItem(k); }catch(e){} });
     _memoryCache.paths = {};
-    if(IDB.isReady()) IDB.kvSet('paths', {}).catch(function(){});
+    if(CloudCompat.isReady()) CloudCompat.kvSet('paths', {}).catch(function(){});
     loadPathsToForm();
     showToast('🗑️ تم المسح');
 }
@@ -3392,7 +3048,7 @@ async function autoSaveFuelVoucherPdf(f){
    ===================================================================== */
 
 function getVoucherLogo(v){
-    return getSharedLogo() || v.logo || ''; 
+    return v.logo || (v.type === 'supply' ? logoData.supply : logoData.withdraw) || '';
 }
 
 /* ✨ buildVoucherInnerContent: الملاحظات خارج الإطار الرئيسي */
@@ -3455,7 +3111,7 @@ function buildVoucherInnerContent(v){
                 '<div class="footer">' + footer + '</div>' +
             '</div>' +
             notesOutside +
-            '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText(v.createdBy || v.lastModifiedBy) + '</div>';
+            '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText() + '</div>';
 }
 
 /* ✨ buildVoucherPrintHtml */
@@ -3530,7 +3186,7 @@ function clearMemoForm(){
 }
 
 function buildMemoInnerContent(memo){
-    const logo = getSharedLogo();
+    const logo = logoData.movement || logoData.withdraw || '';
     const logoHtml = logo ? '<img src="' + logo + '" alt="">' : '';
     const rH = getHeaderRightHtml();
     const lH = '<strong>التاريخ:</strong> ' + escapeMemoText(memo.date||'') + '<br><strong>رقم المذكرة:</strong> ' + escapeMemoText(memo.number||'') + '<br><strong>المرفقات:</strong> ' + escapeMemoText(memo.attachments||'-');
@@ -3554,7 +3210,7 @@ function buildMemoInnerContent(memo){
                 '<div class="name">الاسم: ' + escapeMemoText(memo.senderName||'___________') + '</div>' +
                 '<div class="sign">التوقيع: ___________</div>' +
             '</div></div>' +
-            '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText(v.createdBy || v.lastModifiedBy) + '</div>';
+            '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText() + '</div>';
 }
 
 function showMemoPreviewInApp(memo, returnScreen){
@@ -4450,60 +4106,51 @@ function generateMemoNumber(force){
    ============ الشعارات ===============================================
    ===================================================================== */
 function setLogo(type, input){
-    const f = input && input.files && input.files[0];
+    const f = input.files[0];
     if(!f) return;
-    if(!f.type || !f.type.startsWith('image/')){ _notify('❌ اختر ملف صورة صالحًا','error'); input.value=''; return; }
     const r = new FileReader();
     r.onload = function(e){
-        const shared = e.target.result;
-        logoData = {shared:shared, supply:shared, withdraw:shared, movement:shared, entities:shared};
+        logoData[type] = e.target.result;
+        if(CloudCompat.isReady()) CloudCompat.kvSet('logoData', logoData).catch(function(){});
+        try{ localStorage.setItem('logoData', JSON.stringify(logoData)); }catch(err){}
         renderLogosPreview();
-        showToast('✅ تم اختيار الشعار — اضغط «حفظ الشعار المختار» لحفظه','warn');
+        showToast('✅ تم تحديد الشعار — اضغط "حفظ الشعارات" للتثبيت النهائي', 'warn');
     };
-    r.onerror = function(){ _notify('❌ تعذر قراءة ملف الصورة','error'); };
     r.readAsDataURL(f);
 }
 async function saveLogoSettings(){
     try{
-        logoData = normalizeLogoData(logoData);
-        if(IDB.isReady()) await IDB.kvSet('logoData', logoData);
-        try{ localStorage.setItem('logoData', JSON.stringify(logoData)); }catch(storageError){ throw new Error('الصورة كبيرة على مساحة التخزين؛ اختر صورة أصغر'); }
+        if(CloudCompat.isReady()) await CloudCompat.kvSet('logoData', logoData);
+        localStorage.setItem('logoData', JSON.stringify(logoData));
         _memoryCache.logoData = JSON.parse(JSON.stringify(logoData));
         renderLogosPreview();
-        logAudit('edit','إعدادات','حفظ الشعار الموحد');
-        _notify('✅ تم حفظ الشعار الموحد على هذا الجهاز','success');
+        logAudit('edit','إعدادات','حفظ الشعارات');
+        _notify('✅ تم حفظ الشعارات بنجاح — ستظهر عند إعادة التشغيل','success');
     }catch(e){ _notify('❌ فشل الحفظ: ' + e.message,'error'); }
 }
 async function clearLogos(){
-    if(!await _confirm('⚠️ حذف الشعار الموحد؟', {type:'danger'})) return;
-    logoData = {shared:EMBEDDED_SHARED_LOGO, supply:EMBEDDED_SHARED_LOGO, withdraw:EMBEDDED_SHARED_LOGO, movement:EMBEDDED_SHARED_LOGO, entities:EMBEDDED_SHARED_LOGO};
-    if(IDB.isReady()) await IDB.kvSet('logoData', logoData);
+    if(!await _confirm('⚠️ حذف جميع الشعارات؟', {type:'danger'})) return;
+    logoData = { supply:'', withdraw:'', movement:'', entities:'' };
+    if(CloudCompat.isReady()) await CloudCompat.kvSet('logoData', logoData);
     localStorage.setItem('logoData', JSON.stringify(logoData));
     _memoryCache.logoData = JSON.parse(JSON.stringify(logoData));
-    const input = document.getElementById('sharedLogoInput'); if(input) input.value='';
     renderLogosPreview();
-    _notify(EMBEDDED_SHARED_LOGO ? '🗑️ حُذف الشعار المختار وعاد شعار البرنامج المضمّن' : '🗑️ تم حذف الشعار الموحد','success');
-}
-function useAppFolderLogo(){
-    logoData = {shared:EMBEDDED_SHARED_LOGO, supply:EMBEDDED_SHARED_LOGO, withdraw:EMBEDDED_SHARED_LOGO, movement:EMBEDDED_SHARED_LOGO, entities:EMBEDDED_SHARED_LOGO};
-    saveLogoSettings();
-    const input = document.getElementById('sharedLogoInput'); if(input) input.value='';
+    _notify('🗑️ تم حذف جميع الشعارات','success');
 }
 function renderLogosPreview(){
     const c = document.getElementById('logosPreview');
     if(!c) return;
-    const src = getSharedLogo();
-    c.innerHTML = '<div class="logo-preview-item" style="min-width:180px"><div class="lbl">معاينة الشعار الموحد</div><img id="appFolderLogoPreview" alt="الشعار الموحد" style="max-height:90px;max-width:180px" src=""></div>';
-    const img = document.getElementById('appFolderLogoPreview');
-    if(!img) return;
-    img.onerror = function(){
-        const msg = document.createElement('div');
-        msg.className = 'empty';
-        msg.textContent = 'لم يتم العثور على صورة شعار محفوظة أو ملف logo.png بجوار index.html';
-        if(img.parentNode) img.parentNode.appendChild(msg);
-        img.style.display = 'none';
-    };
-    img.src = src || '';
+    const labels = {supply:'📥 سند التوريد', withdraw:'📤 سند الصرف', movement:'📊 التقارير والمذكرات', entities:'🏢 الجهات'};
+    let h = '';
+    Object.keys(labels).forEach(k => {
+        const src = (logoData && logoData[k]) || '';
+        h += '<div class="logo-preview-item">';
+        h += '<div class="lbl">' + labels[k] + '</div>';
+        if(src) h += '<img src="' + src + '" alt="">';
+        else h += '<div class="empty">لا يوجد شعار</div>';
+        h += '</div>';
+    });
+    c.innerHTML = h;
 }
 
 /* =====================================================================
@@ -4519,7 +4166,7 @@ function saveHeaderSettings(){
         line2: document.getElementById('headerLine2').value.trim() || 'المحور الثالث مشاة و إسناد',
         line3: document.getElementById('headerLine3').value.trim() || 'شعبة الامداد - إدارة التموين'
     };
-    if(IDB.isReady()) IDB.kvSet('headerSettings', headerSettings).catch(function(){});
+    if(CloudCompat.isReady()) CloudCompat.kvSet('headerSettings', headerSettings).catch(function(){});
     localStorage.setItem('headerSettings', JSON.stringify(headerSettings));
     showToast('✅ تم الحفظ');
     _notify('✅ تم حفظ الترويسة','success');
@@ -4549,7 +4196,7 @@ function saveFooterSettings(){
         withdrawFooterRightPosition: document.getElementById('withdrawFooterRightPosition').value.trim() || 'مدير إدارة الإمداد والتموين',
         withdrawFooterRightName: document.getElementById('withdrawFooterRightName').value.trim() || ''
     };
-    if(IDB.isReady()) IDB.kvSet('footerSettings', footerSettings).catch(function(){});
+    if(CloudCompat.isReady()) CloudCompat.kvSet('footerSettings', footerSettings).catch(function(){});
     localStorage.setItem('footerSettings', JSON.stringify(footerSettings));
     showToast('✅ تم الحفظ');
     _notify('✅ تم حفظ التذييل','success');
@@ -4564,7 +4211,7 @@ function changePassword(){
     if(n.length < 4){ m.textContent = '❌ قصيرة'; m.classList.add('show'); return; }
     if(n !== c){ m.textContent = '❌ غير متطابقة'; m.classList.add('show'); return; }
     _memoryCache.password = n;
-    if(IDB.isReady()) IDB.kvSet('password', n).catch(function(){});
+    if(CloudCompat.isReady()) CloudCompat.kvSet('password', n).catch(function(){});
     localStorage.setItem('appPassword', n);
     m.textContent = '✅ تم التغيير';
     m.classList.add('show');
@@ -4583,7 +4230,7 @@ function changeSettingsCode(){
     if(!n || n.length < 3){ m.textContent = '❌ قصير'; m.classList.add('show'); return; }
     if(n !== c){ m.textContent = '❌ غير متطابق'; m.classList.add('show'); return; }
     _memoryCache.settingsCode = n;
-    if(IDB.isReady()) IDB.kvSet('settingsCode', n).catch(function(){});
+    if(CloudCompat.isReady()) CloudCompat.kvSet('settingsCode', n).catch(function(){});
     localStorage.setItem('appSettingsCode', n);
     m.textContent = '✅ تم التغيير';
     m.classList.add('show');
@@ -4636,13 +4283,13 @@ async function restoreBackup(input){
         try{
             const d = JSON.parse(e.target.result);
             ['stores','entities','items','movement','vouchers','memos','assets','food','fuel','users'].forEach(k => { if(d[k]) saveData(k, d[k]); });
-            if(d.logoData){ logoData = normalizeLogoData(d.logoData); if(IDB.isReady()) await IDB.kvSet('logoData', logoData); localStorage.setItem('logoData', JSON.stringify(logoData)); }
-            if(d.headerSettings){ headerSettings = {...headerSettings, ...d.headerSettings}; if(IDB.isReady()) await IDB.kvSet('headerSettings', headerSettings); localStorage.setItem('headerSettings', JSON.stringify(headerSettings)); }
-            if(d.footerSettings){ footerSettings = {...footerSettings, ...d.footerSettings}; if(IDB.isReady()) await IDB.kvSet('footerSettings', footerSettings); localStorage.setItem('footerSettings', JSON.stringify(footerSettings)); }
-            if(d.settingsCode){ _memoryCache.settingsCode = d.settingsCode; if(IDB.isReady()) await IDB.kvSet('settingsCode', d.settingsCode); localStorage.setItem('appSettingsCode', d.settingsCode); }
-            if(d.password){ _memoryCache.password = d.password; if(IDB.isReady()) await IDB.kvSet('password', d.password); localStorage.setItem('appPassword', d.password); }
-            if(d.paths){ _memoryCache.paths = d.paths; if(IDB.isReady()) await IDB.kvSet('paths', d.paths); }
-            if(d.audit){ if(IDB.isReady()){ await IDB.replaceAll('audit', d.audit); } SafeStorage.set(AUDIT_KEY, JSON.stringify(d.audit)); }
+            if(d.logoData){ logoData = d.logoData; if(CloudCompat.isReady()) await CloudCompat.kvSet('logoData', logoData); localStorage.setItem('logoData', JSON.stringify(logoData)); }
+            if(d.headerSettings){ headerSettings = {...headerSettings, ...d.headerSettings}; if(CloudCompat.isReady()) await CloudCompat.kvSet('headerSettings', headerSettings); localStorage.setItem('headerSettings', JSON.stringify(headerSettings)); }
+            if(d.footerSettings){ footerSettings = {...footerSettings, ...d.footerSettings}; if(CloudCompat.isReady()) await CloudCompat.kvSet('footerSettings', footerSettings); localStorage.setItem('footerSettings', JSON.stringify(footerSettings)); }
+            if(d.settingsCode){ _memoryCache.settingsCode = d.settingsCode; if(CloudCompat.isReady()) await CloudCompat.kvSet('settingsCode', d.settingsCode); localStorage.setItem('appSettingsCode', d.settingsCode); }
+            if(d.password){ _memoryCache.password = d.password; if(CloudCompat.isReady()) await CloudCompat.kvSet('password', d.password); localStorage.setItem('appPassword', d.password); }
+            if(d.paths){ _memoryCache.paths = d.paths; if(CloudCompat.isReady()) await CloudCompat.kvSet('paths', d.paths); }
+            if(d.audit){ if(CloudCompat.isReady()){ await CloudCompat.replaceAll('audit', d.audit); } SafeStorage.set(AUDIT_KEY, JSON.stringify(d.audit)); }
             logAudit('add','نظام','استعادة نسخة');
             _notify('✅ تمت الاستعادة','success');
             setTimeout(() => location.reload(), 800);
@@ -4710,11 +4357,11 @@ async function deleteAllSupplyVouchers(){
 async function clearAllData(){
     if(!await _confirm('⚠️ مسح كل البيانات؟', {type:'danger'})) return;
     if(!await _confirm('تأكيد نهائي؟', {type:'danger'})) return;
-    if(IDB.isReady()){
-        await IDB.clear('vouchers'); await IDB.clear('items'); await IDB.clear('movement');
-        await IDB.clear('memos'); await IDB.clear('assets'); await IDB.clear('food'); await IDB.clear('fuel');
-        const allKv = await IDB.kvAll();
-        for(const k in allKv){ await IDB.kvDel(k); }
+    if(CloudCompat.isReady()){
+        await CloudCompat.clear('vouchers'); await CloudCompat.clear('items'); await CloudCompat.clear('movement');
+        await CloudCompat.clear('memos'); await CloudCompat.clear('assets'); await CloudCompat.clear('food'); await CloudCompat.clear('fuel');
+        const allKv = await CloudCompat.kvAll();
+        for(const k in allKv){ await CloudCompat.kvDel(k); }
     }
     const k = [];
     for(let i = 0; i < localStorage.length; i++){
@@ -4902,7 +4549,7 @@ async function issueSupply(){
     if(anomaly){ if(!await _confirm('🚨 تنبيه كشف الشذوذ:\n\n' + anomaly + '\n\nمتابعة؟', {type:'warning'})) return; }
     const old = isEditing ? JSON.parse(JSON.stringify(_editingVoucherOriginal)) : null;
     if(isEditing) reverseVoucherEffects(old);
-    const v = {type:'supply', number, date, issuedDate:date, store, source, notes, items:JSON.parse(JSON.stringify(supplyItems)), createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString(), createdBy:isEditing ? (old.createdBy || getCurrentUsername()) : getCurrentUsername(), lastModifiedBy:isEditing ? getCurrentUsername() : (old && old.lastModifiedBy || '')};
+    const v = {type:'supply', number, date, issuedDate:date, store, source, notes, items:JSON.parse(JSON.stringify(supplyItems)), createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString()};
     const vs = getData('vouchers');
     if(isEditing) vs[_editingVoucherIndex] = v;
     else vs.push(v);
@@ -5039,7 +4686,7 @@ async function issueWithdraw(){
             return;
         }
     }
-    const v = {type:'withdraw', number, date, issuedDate:date, store, entity, receiver, order, notes, items:JSON.parse(JSON.stringify(withdrawItems)), createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString(), createdBy:isEditing ? (old.createdBy || getCurrentUsername()) : getCurrentUsername(), lastModifiedBy:isEditing ? getCurrentUsername() : (old && old.lastModifiedBy || '')};
+    const v = {type:'withdraw', number, date, issuedDate:date, store, entity, receiver, order, notes, items:JSON.parse(JSON.stringify(withdrawItems)), createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString()};
     const vs = getData('vouchers');
     if(isEditing) vs[_editingVoucherIndex] = v;
     else vs.push(v);
@@ -5148,7 +4795,7 @@ async function issueReturnWithdraw(){
             return;
         }
     }
-    const v = {type:'return_withdraw', number, date, issuedDate:date, store, entity, receiver, order:'', notes, items:returned, createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString(), createdBy:isEditing ? (old.createdBy || getCurrentUsername()) : getCurrentUsername(), lastModifiedBy:isEditing ? getCurrentUsername() : ''};
+    const v = {type:'return_withdraw', number, date, issuedDate:date, store, entity, receiver, order:'', notes, items:returned, createdAt:isEditing && old.createdAt ? old.createdAt : new Date().toISOString()};
     const vs = getData('vouchers');
     if(isEditing) vs[_editingVoucherIndex] = v;
     else vs.push(v);
@@ -5310,12 +4957,12 @@ async function exportVoucherPdf(){
 }
 function printSupply(){
     if(!supplyItems.length){ _notify('أضف أصناف','warn'); return; }
-    const v = {type:'supply', number:document.getElementById('supplyNumber').value.trim() || 'توريد-' + String(Date.now()).slice(-6), date:document.getElementById('supplyDate').value, issuedDate:document.getElementById('supplyDate').value, store:document.getElementById('supplyStore').value, source:document.getElementById('supplySource').value.trim() || 'غير محدد', notes:document.getElementById('supplyNotes').value.trim() || '', items:JSON.parse(JSON.stringify(supplyItems)), logo:getSharedLogo()};
+    const v = {type:'supply', number:document.getElementById('supplyNumber').value.trim() || 'توريد-' + String(Date.now()).slice(-6), date:document.getElementById('supplyDate').value, issuedDate:document.getElementById('supplyDate').value, store:document.getElementById('supplyStore').value, source:document.getElementById('supplySource').value.trim() || 'غير محدد', notes:document.getElementById('supplyNotes').value.trim() || '', items:JSON.parse(JSON.stringify(supplyItems)), logo:logoData.supply||''};
     showVoucherPreviewInApp(v, 'supplyScreen');
 }
 function printWithdraw(){
     if(!withdrawItems.length){ _notify('أضف أصناف','warn'); return; }
-    const v = {type:'withdraw', number:document.getElementById('withdrawNumber').value.trim() || 'صرف-' + String(Date.now()).slice(-6), date:document.getElementById('withdrawDate').value, issuedDate:document.getElementById('withdrawDate').value, store:document.getElementById('withdrawStore').value, entity:document.getElementById('withdrawEntity').value, receiver:document.getElementById('withdrawReceiver').value, order:document.getElementById('withdrawOrder').value, notes:document.getElementById('withdrawNotes').value, items:JSON.parse(JSON.stringify(withdrawItems)), logo:getSharedLogo()};
+    const v = {type:'withdraw', number:document.getElementById('withdrawNumber').value.trim() || 'صرف-' + String(Date.now()).slice(-6), date:document.getElementById('withdrawDate').value, issuedDate:document.getElementById('withdrawDate').value, store:document.getElementById('withdrawStore').value, entity:document.getElementById('withdrawEntity').value, receiver:document.getElementById('withdrawReceiver').value, order:document.getElementById('withdrawOrder').value, notes:document.getElementById('withdrawNotes').value, items:JSON.parse(JSON.stringify(withdrawItems)), logo:logoData.withdraw||''};
     showVoucherPreviewInApp(v, 'withdrawScreen');
 }
 
@@ -5742,9 +5389,7 @@ function issueMemo(){
         body: bodyText,
         bodyHtml: bodyHtml,
         attachments, senderPosition, senderName,
-        createdAt: isEditing && getData('memos')[_editingMemoIndex].createdAt ? getData('memos')[_editingMemoIndex].createdAt : new Date().toISOString(),
-        createdBy: isEditing ? (getData('memos')[_editingMemoIndex].createdBy || getCurrentUsername()) : getCurrentUsername(),
-        lastModifiedBy: isEditing ? getCurrentUsername() : ''
+        createdAt: isEditing && getData('memos')[_editingMemoIndex].createdAt ? getData('memos')[_editingMemoIndex].createdAt : new Date().toISOString()
     };
     const memos = getData('memos');
     if(isEditing){ memos[_editingMemoIndex] = memo; saveData('memos', memos); logAudit('edit','مذكرة','تعديل: ' + number); clearMemoForm(); renderMemos(); showToast('✅ تم حفظ التعديل'); }
@@ -6426,7 +6071,7 @@ function getFuelVoucherInnerContent(f){
     const ml = getArabicMonthFromDate(f.date);
     const qn = Number(f.qty)||0;
     const qw = numberToArabicWords(qn);
-    const logo = getSharedLogo();
+    const logo = logoData.withdraw || logoData.movement || '';
     const lh = logo ? '<img src="' + logo + '" style="max-height:70px;max-width:120px;object-fit:contain;" alt="">' : '';
     const today = getTodayISO();
     const no = (isS ? 'توريد-مخصص-' : 'صرف-مخصص-') + String(Date.now()).slice(-6);
@@ -6441,7 +6086,7 @@ function getFuelVoucherInnerContent(f){
         '<div class="info"><strong>الوحدة العسكرية:</strong> ' + escapeVoucherHtml(f.unit||'-') + ' &nbsp; | &nbsp; <strong>المستلم:</strong> ' + escapeVoucherHtml(f.receiver||'-') + '<br><strong>المادة:</strong> ' + escapeVoucherHtml(f.type||'-') + ' &nbsp; | &nbsp; <strong>العملية:</strong> ' + escapeVoucherHtml(f.operation||'-') + ' &nbsp; | &nbsp; <strong>التاريخ:</strong> ' + escapeVoucherHtml(f.date||'-') + (ml ? ' (' + escapeVoucherHtml(ml) + ')' : '') + '</div>' +
         '<table style="table-layout:auto;width:auto;min-width:100%;"><thead><tr><th>التسلسل</th><th>المادة</th><th>الوحدة (لتر)</th><th>الكمية بالأرقام</th><th>الكمية بالأحرف</th><th>الملاحظة</th></tr></thead><tbody><tr><td>1</td><td>' + escapeVoucherHtml(f.type||'-') + '</td><td>لتر</td><td>' + qn + '</td><td>' + escapeVoucherHtml(qw) + ' لتر</td><td>' + escapeVoucherHtml(f.notes||'-') + '</td></tr></tbody></table>' +
         '<div class="footer"><div><strong>' + rp + '</strong><br>الاسم: ' + rn + '<br>التوقيع: ___________</div><div><strong>' + lp + '</strong><br>الاسم: ' + ln + '<br>التوقيع: ___________</div></div>' +
-        '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText(memo.createdBy || memo.lastModifiedBy) + '</div>';
+        '<div class="export-footer-text" style="text-align:center;font-size:10px;color:#444;margin-top:14px;border-top:1px dashed #999;padding-top:6px;">' + getCurrentUserFooterText() + '</div>';
 }
 function showFuelVoucherById(id){
     const f = getData('fuel').find(x => String(x.id||'') === String(id));
@@ -6943,6 +6588,29 @@ window.addEventListener('load', _initReady);
 setTimeout(_initReady, 500);
 
 console.log('🚀 النظام جاهز — الإصدار 33.0 (الملاحظات خارج الإطار + نظام المستخدمين + الصلاحيات)');
+
+// مراقبة حالة الاتصال بـ Firebase وتحديث المؤشر
+setTimeout(() => {
+    if(window.FirebaseLayer) {
+        const connectedRef = window.FirebaseLayer.ref(window.FirebaseLayer.db, ".info/connected");
+        window.FirebaseLayer.onValue(connectedRef, (snap) => {
+            const statusEl = document.getElementById('syncStatus');
+            if(statusEl) {
+                if (snap.val() === true) {
+                    statusEl.textContent = '🟢 متصل بالسحابة';
+                    statusEl.style.color = '#7cf5a5';
+                } else {
+                    statusEl.textContent = '🔴 غير متصل (محلي)';
+                    statusEl.style.color = '#f5c5bd';
+                }
+            }
+        });
+    } else {
+        const statusEl = document.getElementById('syncStatus');
+        if(statusEl) statusEl.textContent = '⚠️ إعداد Firebase غير مكتمل';
+    }
+}, 2000);
+
 </script>
 </body>
 </html>
